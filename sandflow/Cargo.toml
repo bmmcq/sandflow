@@ -1,0 +1,11 @@
+[package]
+name = "sandflow"
+version = "0.1.0"
+authors = ["bmmcq <chenqiang.mcq@gmail.com>"]
+edition = "2021"
+keywords = ["dataflow", "async", "distributed"]
+license = "MIT"
+
+[dependencies]
+lazy_static = "1.4.0"
+futures = { version = "0.3", features = ["default", "thread-pool"] }
