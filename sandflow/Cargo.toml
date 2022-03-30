@@ -9,3 +9,4 @@ license = "MIT"
 [dependencies]
 lazy_static = "1.4.0"
 futures = { version = "0.3", features = ["default", "thread-pool"] }
+pin-project-lite = "0.2.8"
