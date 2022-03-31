@@ -164,8 +164,16 @@ name = "sandflow"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lazy_static",
  "pin-project-lite",
+ "sandflow-executor",
+]
+
+[[package]]
+name = "sandflow-executor"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lazy_static",
 ]
 
 [[package]]

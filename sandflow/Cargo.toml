@@ -7,6 +7,6 @@ keywords = ["dataflow", "async", "distributed"]
 license = "MIT"
 
 [dependencies]
-lazy_static = "1.4.0"
-futures = { version = "0.3", features = ["default", "thread-pool"] }
+futures = "0.3"
 pin-project-lite = "0.2.8"
+sandflow-executor = { path = "../sandflow-executor" }

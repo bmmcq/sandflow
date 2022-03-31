@@ -78,8 +78,9 @@ where
 {
     fn try_send(self: Pin<&mut Self>, item: Item, cx: &mut Context<'_>) -> Result<Option<Item>, Self::Error> {
         let this = self.project();
-        let index = *this.cursor;
+        let cursor = *this.cursor;
         let sinks = this.sinks.get_mut();
+        let index = cursor % sinks.len();
         if Pin::new(&mut sinks[index]).poll_ready(cx)?.is_ready() {
             Pin::new(&mut sinks[index]).start_send(item)?;
             *this.cursor += 1;
