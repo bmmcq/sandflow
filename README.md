@@ -1,5 +1,7 @@
 # sandflow
-Try to extend async [Stream](https://doc.rust-lang.org/std/stream/index.html) to do more things, e.g. map-reduce, iteration, and it can be executed with massive parallel in a distributed cluster;
+Try to extend async [Stream](https://doc.rust-lang.org/std/stream/index.html) to do more things, e.g. map-reduce, iteration. 
+
+More than that, the async stream can be executed with massive parallel in a distributed cluster;
 
 ## Example
 ```rust
