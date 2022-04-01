@@ -1,10 +1,10 @@
 use std::future::Future;
 
-use futures::stream::{Forward, Map, Then};
+use futures::stream::{FlatMap, Forward, Map, Then};
 use futures::{Sink, Stream, StreamExt, TryStream};
 
-use crate::SandFlowBuilder;
-
+use crate::channels::multi_sink::Router;
+use crate::{ResultStream, SandFlowBuilder};
 
 pub type DynStream<Item> = Box<dyn Stream<Item = Item> + Send + Unpin>;
 //pub type PStream<Item> = PartialStream<Box<dyn Stream<Item = Item> + Send + Unpin>>;
@@ -48,6 +48,23 @@ where
     {
         let then = self.stream.then(f);
         PartialStream::new(self.fb, then)
+    }
+
+    pub fn flat_map<U, F>(self, f: F) -> PartialStream<FlatMap<Ps, U, F>>
+    where
+        F: FnMut(Ps::Item) -> U,
+        U: Stream,
+        Ps: Sized,
+    {
+        let fm = self.stream.flat_map(f);
+        PartialStream::new(self.fb, fm)
+    }
+
+    pub fn exchange<R>(self, _f: R) -> PartialStream<ResultStream<Ps::Item>>
+    where
+        R: Router<Ps::Item>,
+    {
+        todo!()
     }
 
     pub fn forward<S>(self, sink: S) -> Forward<Ps, S>

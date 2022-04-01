@@ -3,7 +3,7 @@ use futures::{SinkExt, Stream};
 use crate::channels::multi_sink::RoundRobinSink;
 use crate::errors::FError;
 use crate::flow::SandFlowBuilder;
-use crate::streams::pstream::{PartialStream, DynStream};
+use crate::streams::pstream::{DynStream, PartialStream};
 use crate::streams::result_stream::ResultStream;
 use crate::streams::StreamExtend;
 
