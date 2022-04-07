@@ -3,11 +3,11 @@ use std::future::Future;
 use futures::stream::{FlatMap, Forward, Map, Then};
 use futures::{Sink, Stream, StreamExt, TryStream};
 
-use crate::channels::multi_sink::Router;
-use crate::{ResultStream, SandFlowBuilder};
+use crate::channels::multi_sink::{RouteSink, Router};
+use crate::channels::GeneralReceiver;
+use crate::{FError, SandData, SandFlowBuilder, StreamExtend};
 
 pub type DynStream<Item> = Box<dyn Stream<Item = Item> + Send + Unpin>;
-//pub type PStream<Item> = PartialStream<Box<dyn Stream<Item = Item> + Send + Unpin>>;
 
 pub struct PartialStream<Ps> {
     stream: Ps,
@@ -60,18 +60,28 @@ where
         PartialStream::new(self.fb, fm)
     }
 
-    pub fn exchange<R>(self, _f: R) -> PartialStream<ResultStream<Ps::Item>>
-    where
-        R: Router<Ps::Item>,
-    {
-        todo!()
-    }
-
     pub fn forward<S>(self, sink: S) -> Forward<Ps, S>
     where
         S: Sink<Ps::Ok, Error = Ps::Error>,
         Ps: TryStream + Sized,
     {
         self.stream.forward(sink)
+    }
+}
+
+impl<Si, Item> PartialStream<Si>
+where
+    Item: SandData,
+    Si: Stream<Item = Result<Item, FError>> + Send + Unpin + 'static,
+{
+    pub fn exchange<R>(self, route: R) -> PartialStream<GeneralReceiver<Item>>
+    where
+        R: Router<Item> + Send + Unpin + 'static,
+    {
+        let (senders, receiver) = self.fb.allocate::<Item>();
+        let sink = RouteSink::new(route, senders);
+        let st = self.stream.multi_forward(sink);
+        self.fb.add_stage(st);
+        PartialStream::new(self.fb, receiver)
     }
 }
