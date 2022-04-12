@@ -1,13 +1,14 @@
 use std::future::Future;
+use std::pin::Pin;
 
-use futures::stream::{FlatMap, Forward, Map, Then};
+use futures::stream::{FlatMap, Forward, Inspect, Map, Then};
 use futures::{Sink, Stream, StreamExt, TryStream};
 
-use crate::channels::multi_sink::{RouteSink, Router};
+use crate::channels::multi_sink::RouteSink;
 use crate::channels::GeneralReceiver;
 use crate::{FError, SandData, SandFlowBuilder, StreamExtend};
 
-pub type DynStream<Item> = Box<dyn Stream<Item = Item> + Send + Unpin>;
+pub type DynStream<Item> = Pin<Box<dyn Stream<Item = Item> + Send>>;
 
 pub struct PartialStream<Ps> {
     stream: Ps,
@@ -28,7 +29,7 @@ where
     where
         Ps: 'static,
     {
-        PartialStream::new(self.fb, Box::new(Box::pin(self.stream)) as Box<dyn Stream<Item = Ps::Item> + Send + Unpin>)
+        PartialStream::new(self.fb, Box::pin(self.stream) as Pin<Box<dyn Stream<Item = Ps::Item> + Send>>)
     }
 
     pub fn map<T, F>(self, f: F) -> PartialStream<Map<Ps, F>>
@@ -38,6 +39,15 @@ where
     {
         let mapped = self.stream.map(f);
         PartialStream::new(self.fb, mapped)
+    }
+
+    pub fn inspect<F>(self, f: F) -> PartialStream<Inspect<Ps, F>>
+    where
+        F: FnMut(&Ps::Item),
+        Ps: Sized,
+    {
+        let inspected = self.stream.inspect(f);
+        PartialStream::new(self.fb, inspected)
     }
 
     pub fn then<Fut, F>(self, f: F) -> PartialStream<Then<Ps, Fut, F>>
@@ -72,11 +82,11 @@ where
 impl<Si, Item> PartialStream<Si>
 where
     Item: SandData,
-    Si: Stream<Item = Result<Item, FError>> + Send + Unpin + 'static,
+    Si: Stream<Item = Result<Item, FError>> + Send + 'static,
 {
     pub fn exchange<R>(self, route: R) -> PartialStream<GeneralReceiver<Item>>
     where
-        R: Router<Item> + Send + Unpin + 'static,
+        R: Fn(&Item) -> u64 + Send + 'static,
     {
         let (senders, receiver) = self.fb.allocate::<Item>();
         let sink = RouteSink::new(route, senders);

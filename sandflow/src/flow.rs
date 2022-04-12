@@ -1,13 +1,16 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll};
+use futures::future::JoinAll;
 
 use futures::FutureExt;
 
 use crate::channels::{GeneralReceiver, GeneralSender, Port};
 use crate::{FError, SandData};
 
-pub type DynFuture<D> = Box<dyn Future<Output = D> + Send + Unpin + 'static>;
+pub type DynFuture<D> = Pin<Box<dyn Future<Output = D> + Send + 'static>>;
 
 #[derive(Clone)]
 pub struct SandFlowBuilder {
@@ -24,7 +27,7 @@ impl SandFlowBuilder {
 
     pub fn add_stage<F>(&self, stage: F)
     where
-        F: Future<Output = Result<(), FError>> + Send + Unpin + 'static,
+        F: Future<Output = Result<(), FError>> + Send + 'static,
     {
         let ok_st = stage.map(|f| {
             if let Err(e) = f {
@@ -33,7 +36,8 @@ impl SandFlowBuilder {
             }
             ()
         });
-        self.stages.borrow_mut().push(Box::new(ok_st));
+
+        self.stages.borrow_mut().push(Box::pin(ok_st));
     }
 
     pub fn allocate<T: SandData>(&self) -> (Vec<GeneralSender<T>>, GeneralReceiver<T>) {
@@ -56,14 +60,15 @@ impl SandFlowBuilder {
             stages_final.push(fut);
         }
 
-        SandFlow { parallel: self.parallel, index: self.index, stages: stages_final }
+        let task = futures::future::join_all(stages_final);
+        SandFlow { parallel: self.parallel, index: self.index as u32, task }
     }
 }
 
 pub struct SandFlow {
     parallel: usize,
-    index: usize,
-    stages: Vec<DynFuture<()>>,
+    index: u32,
+    task: JoinAll<DynFuture<()>>
 }
 
 impl SandFlow {
@@ -71,13 +76,46 @@ impl SandFlow {
         self.parallel
     }
 
-    pub fn get_index(&self) -> usize {
+    pub fn get_index(&self) -> u32 {
         self.index
     }
+}
 
-    pub fn run(self) {
-        for st in self.stages {
-            sandflow_executor::spawn(st);
-        }
+thread_local! {
+    static WORKER_INDEX : Cell<isize> = Cell::new(-1);
+}
+
+#[allow(dead_code)]
+struct WorkerIndexGuard {
+    index:  u32,
+}
+
+impl WorkerIndexGuard {
+    pub fn new(index: u32) -> Self {
+        let set_idx = index as isize;
+        WORKER_INDEX.with(|idx| idx.set(set_idx));
+        WorkerIndexGuard { index }
     }
 }
+
+impl Drop for WorkerIndexGuard {
+    fn drop(&mut self) {
+        WORKER_INDEX.with(|idx| idx.set(-1));
+    }
+}
+
+pub fn worker_id() -> isize {
+    WORKER_INDEX.with(|idx| idx.get())
+}
+
+impl Future for SandFlow {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let _guard = WorkerIndexGuard::new(this.index);
+        Pin::new(&mut this.task).poll(cx).map(|_| ())
+    }
+}
+
+

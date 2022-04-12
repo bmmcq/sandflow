@@ -17,6 +17,8 @@ mod flow;
 mod streams;
 mod test;
 
+pub use flow::worker_id;
+
 pub fn spawn<Si, So, DI, DO, F, FF>(parallel: usize, source: Si, func: F) -> ResultStream<DO>
 where
     DI: SandData,
@@ -53,7 +55,7 @@ where
 
     for fb in fbs {
         let task = fb.build();
-        task.run();
+        sandflow_executor::spawn(task);
     }
 
     ResultStream::new(rx)
