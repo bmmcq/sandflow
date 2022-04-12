@@ -5,21 +5,28 @@ More than that, the async stream can be executed with massive parallel in a dist
 
 ## Example
 ```rust
-use futures::StreamExt;
 
 fn main() {
     let source = futures::stream::iter(vec![1, 2, 3, 4, 5, 6].into_iter()).map(|i| Ok(i));
-    // this will run 'source.map(..).then(..)' in parallel(with 2 threads);
+    // items in source stream will be consumed by parallel tasks in a round-robin manner;
     let result = sandflow::spawn(2, source, || {
         move |src| {
             src.map(|item| item + 1)
-                .then(|item| async move { Ok(item * 2) })
+                .then(|item| async move { Ok(item + 1) })
+                // exchange data between tasks; (e.g. for load balance;)
+                .exchange(|item| *item)
+                .inspect(| item | {
+                    println!("worker[{}]: {};", worker_id(), item)
+                })
+                .then(|item|  async move { Ok (item * 2)})
         }
     })
     .collect::<Vec<_>>();
     let r = futures::executor::block_on(result);
     println!("{:?}", r);
 }
+
+
 ```
 
 ## TODO
