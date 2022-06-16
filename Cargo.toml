@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "sandflow",
-    "sandflow-executor"
+    "executor",
+    "cluster"
 ]
 
 [profile.release]

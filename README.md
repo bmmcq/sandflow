@@ -27,8 +27,5 @@ fn main() {
 }
 
 
-``
+```
 
-## TODO
-- iteration 
-- distirbute execution

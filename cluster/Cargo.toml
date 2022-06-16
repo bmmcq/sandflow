@@ -1,0 +1,10 @@
+[package]
+name = "sandflow-cluster"
+version = "0.1.0"
+edition = "2021"
+
+
+[dependencies]
+lazy_static = "1.4.0"
+async-trait = "0.1"
+valley = { git = "https://github.com/bmmcq/valley" }

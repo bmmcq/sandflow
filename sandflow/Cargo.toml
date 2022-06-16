@@ -10,4 +10,5 @@ license = "MIT"
 log = "0.4"
 futures = "0.3"
 pin-project-lite = "0.2.8"
-sandflow-executor = { path = "../sandflow-executor" }
+sandflow-executor = { path = "../executor" }
+sandflow-cluster = { path = "../cluster" }
