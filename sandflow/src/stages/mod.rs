@@ -125,5 +125,6 @@ impl<T> DerefMut for StageSink<T> {
     }
 }
 
+pub(crate) mod sink;
 pub(crate) mod source;
 pub(crate) mod utils;
