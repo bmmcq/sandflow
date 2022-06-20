@@ -60,4 +60,4 @@ impl<T> Sink<T> for LocalStageSink<T> {
     }
 }
 
-mod select;
+pub(crate) mod select;

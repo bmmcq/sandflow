@@ -5,41 +5,41 @@ use std::task::{Context, Poll};
 use futures::{ready, Stream};
 use pin_project_lite::pin_project;
 
-use crate::channels::multi_sink::MultiSink;
+use crate::stages::sink::TrySink;
 
 pin_project! {
-    #[project = MultiForwardProj]
-    pub struct MultiForward<St, Ms, Item> {
+    #[project = SelectForwardProj]
+    pub struct SelectForward<St, Ts, Item> {
         #[pin]
-        sink: Option<Ms>,
+        sink: Option<Ts>,
         #[pin]
         stream: St,
         buffered_item: Option<Item>
     }
 }
 
-impl<St, Ms, Item> MultiForward<St, Ms, Item> {
-    pub fn new(stream: St, sink: Ms) -> Self {
+impl<St, Ts, Item> SelectForward<St, Ts, Item> {
+    pub fn new(stream: St, sink: Ts) -> Self {
         Self { sink: Some(sink), stream, buffered_item: None }
     }
 }
 
-impl<St, Ms, Item, E> Future for MultiForward<St, Ms, Item>
+impl<St, Ms, Item, E> Future for SelectForward<St, Ms, Item>
 where
     St: Stream<Item = Result<Item, E>>,
-    Ms: MultiSink<Item, Error = E>,
+    Ms: TrySink<Item, Error = E>,
 {
     type Output = Result<(), E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let MultiForwardProj { mut sink, mut stream, buffered_item } = self.project();
+        let SelectForwardProj { mut sink, mut stream, buffered_item } = self.project();
         let mut si = sink
             .as_mut()
             .as_pin_mut()
             .expect("polled 'MultiForward' after completion");
         loop {
             if let Some(item) = buffered_item.take() {
-                if let Some(pending) = si.as_mut().try_send(item, cx)? {
+                if let Some(pending) = si.as_mut().try_sink(item, cx)? {
                     *buffered_item = Some(pending);
                     return Poll::Pending;
                 }

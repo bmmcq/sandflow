@@ -3,9 +3,12 @@ use std::future::Future;
 use futures::stream::{FlatMap, Forward, Inspect, Map, Then};
 use futures::{Sink, Stream, StreamExt, TryStream};
 
-use crate::channels::multi_sink::RouteSink;
-use crate::stages::StageSource;
-use crate::{FError, SandData, SandFlowBuilder, StreamExtend};
+use super::StreamExtend;
+use crate::errors::FError;
+use crate::flow::SandFlowBuilder;
+use crate::stages::sink::select::SelectSink;
+use crate::stages::source::StageInput;
+use crate::SandData;
 
 pub struct PStream<St> {
     stream: St,
@@ -18,7 +21,7 @@ impl<St> PStream<St> {
     }
 }
 
-pub type SourceStream<T> = PStream<StageSource<T>>;
+pub type InputStream<T> = PStream<StageInput<T>>;
 
 impl<St> PStream<St>
 where
@@ -76,13 +79,12 @@ where
     Item: SandData,
     Si: Stream<Item = Result<Item, FError>> + Send + 'static,
 {
-    pub fn exchange<R>(self, route: R) -> SourceStream<Item>
+    pub fn exchange<R>(self, route: R) -> InputStream<Item>
     where
-        R: Fn(&Item) -> u64 + Send + 'static,
+        R: FnMut(&Item) -> u64 + Send + Unpin + 'static,
     {
-        let (senders, receiver) = self.fb.allocate::<Item>();
-        let sink = RouteSink::new(route, senders);
-        let st = self.stream.multi_forward(sink);
+        let (senders, receiver) = self.fb.alloc_local::<Item>();
+        let st = self.stream.select_forward(SelectSink::new(senders, route));
         self.fb.add_stage(st);
         PStream::new(self.fb, receiver)
     }

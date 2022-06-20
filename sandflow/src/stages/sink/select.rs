@@ -20,6 +20,22 @@ where
     }
 }
 
+pub struct RoundSelector<T> {
+    cursor: usize,
+    _ph: std::marker::PhantomData<T>,
+}
+
+impl<T> Unpin for RoundSelector<T> {}
+
+impl<T> Selector<T> for RoundSelector<T> {
+    #[inline]
+    fn select_by(self: Pin<&mut Self>, _: &T) -> u64 {
+        let this = self.get_mut();
+        this.cursor += 1;
+        this.cursor as u64 - 1
+    }
+}
+
 pin_project! {
     struct TagSink<Si> {
         #[pin]
@@ -29,7 +45,16 @@ pin_project! {
     }
 }
 
-impl <Si, T> TrySink<T> for TagSink<Si> where Si: Sink<T> {
+impl<Si> TagSink<Si> {
+    fn new(sink: Si) -> Self {
+        Self { sink, is_dirty: false, is_closed: false }
+    }
+}
+
+impl<Si, T> TrySink<T> for TagSink<Si>
+where
+    Si: Sink<T>,
+{
     type Error = Si::Error;
 
     fn try_sink(self: Pin<&mut Self>, item: T, cx: &mut Context<'_>) -> Result<Option<T>, Self::Error> {
@@ -41,9 +66,7 @@ impl <Si, T> TrySink<T> for TagSink<Si> where Si: Sink<T> {
                 Ok(None)
             }
             Poll::Ready(Err(e)) => Err(e),
-            Poll::Pending => {
-                Ok(Some(item))
-            }
+            Poll::Pending => Ok(Some(item)),
         }
     }
 
@@ -55,9 +78,7 @@ impl <Si, T> TrySink<T> for TagSink<Si> where Si: Sink<T> {
                     *this.is_dirty = false;
                     Poll::Ready(Ok(()))
                 }
-                Err(e) => {
-                    Poll::Ready(Err(e))
-                }
+                Err(e) => Poll::Ready(Err(e)),
             }
         } else {
             Poll::Ready(Ok(()))
@@ -72,9 +93,7 @@ impl <Si, T> TrySink<T> for TagSink<Si> where Si: Sink<T> {
                     *this.is_closed = true;
                     Poll::Ready(Ok(()))
                 }
-                Err(e) => {
-                    Poll::Ready(Err(e))
-                }
+                Err(e) => Poll::Ready(Err(e)),
             }
         } else {
             Poll::Ready(Ok(()))
@@ -92,6 +111,28 @@ pin_project! {
     }
 }
 
+impl<Si, T> SelectSink<Si, T> {
+    pub fn new(sinks: Vec<Si>, selector: T) -> Self {
+        let sink_size = sinks.len();
+        let rf = Rectifier::new(sink_size);
+        let mut tag_sinks = Vec::with_capacity(sink_size);
+        for s in sinks {
+            tag_sinks.push(TagSink::new(s));
+        }
+
+        Self { sinks: tag_sinks, selector, rf, sink_size: sink_size as u64 }
+    }
+}
+
+impl<Si, Item> SelectSink<Si, RoundSelector<Item>> {
+    pub fn round_select(sinks: Vec<Si>) -> Self
+    where
+        Si: Sink<Item>,
+    {
+        Self::new(sinks, RoundSelector { cursor: 0, _ph: std::marker::PhantomData })
+    }
+}
+
 impl<Si, Item, T> TrySink<Item> for SelectSink<Si, T>
 where
     Si: Sink<Item>,
@@ -102,11 +143,7 @@ where
     fn try_sink(self: Pin<&mut Self>, item: Item, cx: &mut Context<'_>) -> Result<Option<Item>, Self::Error> {
         let this = self.project();
         let index = this.selector.select_by(&item);
-        let rf_index = if index < *this.sink_size {
-            index as usize
-        } else {
-            this.rf.get(index)
-        };
+        let rf_index = if index < *this.sink_size { index as usize } else { this.rf.get(index) };
         // if safe here, because no `&mut sinks[rf_index]` is moved;
         let sink = unsafe { Pin::new_unchecked(&mut this.sinks[rf_index]) };
         sink.try_sink(item, cx)
@@ -115,9 +152,7 @@ where
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.project();
         for sink in this.sinks.iter_mut() {
-            let pinned = unsafe {
-                Pin::new_unchecked(sink)
-            };
+            let pinned = unsafe { Pin::new_unchecked(sink) };
             if let Err(e) = ready!(pinned.poll_flush(cx)) {
                 return Poll::Ready(Err(e));
             }
@@ -128,9 +163,7 @@ where
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         let this = self.project();
         for sink in this.sinks.iter_mut() {
-            let pinned = unsafe {
-                Pin::new_unchecked(sink)
-            };
+            let pinned = unsafe { Pin::new_unchecked(sink) };
             if let Err(e) = ready!(pinned.poll_close(cx)) {
                 return Poll::Ready(Err(e));
             }
@@ -145,7 +178,6 @@ enum Rectifier {
 }
 
 impl Rectifier {
-
     fn new(length: usize) -> Self {
         if length & (length - 1) == 0 {
             Rectifier::And(length as u64 - 1)
@@ -154,6 +186,7 @@ impl Rectifier {
         }
     }
 
+    #[inline]
     fn get(&self, v: u64) -> usize {
         let r = match self {
             Rectifier::And(b) => v & *b,

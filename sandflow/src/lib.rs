@@ -3,12 +3,16 @@ extern crate log;
 
 use std::sync::Arc;
 
-use futures::{SinkExt, Stream};
+pub use flow::worker_id;
+use futures::Stream;
 
-use crate::channels::multi_sink::RoundRobinSink;
 use crate::errors::FError;
 use crate::flow::SandFlowBuilder;
-use crate::streams::pstream::{PStream, SourceStream};
+use crate::stages::sink::select::SelectSink;
+use crate::stages::sink::LocalStageSink;
+use crate::stages::source::{SourceStage, StageInput};
+use crate::stages::utils::ErrorHook;
+use crate::streams::pstream::{InputStream, PStream};
 use crate::streams::result_stream::ResultStream;
 use crate::streams::StreamExtend;
 
@@ -23,12 +27,6 @@ mod stages;
 mod streams;
 mod test;
 
-pub use flow::worker_id;
-
-use crate::stages::source::SourceStage;
-use crate::stages::utils::ErrorHook;
-use crate::stages::{StageSink, StageSource};
-
 const DEFAULT_PARALLEL: u32 = 2;
 
 pub fn spawn<Si, So, DI, DO, F, FF>(source: Si, func: F) -> ResultStream<DO>
@@ -38,7 +36,7 @@ where
     Si: Stream<Item = Result<DI, FError>> + Send + Unpin + 'static,
     So: Stream<Item = Result<DO, FError>> + Send + 'static,
     F: Fn() -> FF,
-    FF: FnOnce(SourceStream<DI>) -> PStream<So>,
+    FF: FnOnce(InputStream<DI>) -> PStream<So>,
 {
     let parallel = std::env::var("SANDFLOW_DEFAULT_PARALLEL")
         .map(|val| val.parse::<u32>().unwrap_or(DEFAULT_PARALLEL))
@@ -53,7 +51,7 @@ where
     Si: Stream<Item = Result<DI, FError>> + Send + Unpin + 'static,
     So: Stream<Item = Result<DO, FError>> + Send + 'static,
     F: Fn() -> FF,
-    FF: FnOnce(SourceStream<DI>) -> PStream<So>,
+    FF: FnOnce(InputStream<DI>) -> PStream<So>,
 {
     let mut txs = Vec::new();
     let mut rxs = Vec::new();
@@ -62,20 +60,20 @@ where
     let err_hook = Arc::new(ErrorHook::new());
     for i in 0..parallel {
         let (tx, rx) = futures::channel::mpsc::channel::<DI>(1024);
-        txs.push(tx.sink_map_err(|e| FError::ChSend(e)));
+        txs.push(LocalStageSink::<DI>::new(tx));
         rxs.push(rx);
         fbs.push(SandFlowBuilder::new(job_id, parallel, i, err_hook.clone()));
     }
 
-    let source_fut = source.multi_forward(RoundRobinSink::new(txs));
+    let source_fut = source.select_forward(SelectSink::round_select(txs));
 
     let (tx, rx) = futures::channel::mpsc::channel::<DO>(1024);
     for (i, r) in rxs.into_iter().enumerate() {
         let fb = fbs[i].clone();
-        let st = PStream::new(fb, StageSource::new(r));
+        let st = PStream::new(fb, StageInput::new(r));
         let progress = func();
         let last = progress(st);
-        let sink = StageSink::<DO>::new(tx.clone());
+        let sink = LocalStageSink::<DO>::new(tx.clone());
         let last_fut = last.forward(sink);
         fbs[i].add_stage(last_fut);
     }

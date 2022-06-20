@@ -3,7 +3,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use futures::ready;
+use futures::channel::mpsc::Receiver;
+use futures::{ready, Stream};
 use pin_project_lite::pin_project;
 
 use crate::stages::utils::ErrorHook;
@@ -47,5 +48,22 @@ where
                 Poll::Ready(())
             }
         }
+    }
+}
+
+pub struct StageInput<T>(Receiver<T>);
+
+impl<T> StageInput<T> {
+    pub fn new(receiver: Receiver<T>) -> Self {
+        StageInput(receiver)
+    }
+}
+
+impl<T> Stream for StageInput<T> {
+    type Item = T;
+
+    #[inline]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.get_mut().0).poll_next(cx)
     }
 }

@@ -8,9 +8,12 @@ use std::task::{Context, Poll};
 use futures::future::JoinAll;
 
 use crate::channels::Port;
+use crate::errors::FError;
+use crate::stages::sink::LocalStageSink;
+use crate::stages::source::StageInput;
 use crate::stages::utils::ErrorHook;
-use crate::stages::{AsyncStage, StageSink, StageSource};
-use crate::{FError, SandData};
+use crate::stages::AsyncStage;
+use crate::SandData;
 
 #[derive(Clone)]
 pub struct SandFlowBuilder {
@@ -55,16 +58,16 @@ impl SandFlowBuilder {
         stages_borrow.push(AsyncStage::new(self.index as u32, next_stage_id, stage, &self.error_hook));
     }
 
-    pub fn allocate<T: SandData>(&self) -> (Vec<StageSink<T>>, StageSource<T>) {
+    pub fn alloc_local<T: SandData>(&self) -> (Vec<LocalStageSink<T>>, StageInput<T>) {
         let mut bp = self.ports.borrow_mut();
         let port = *bp;
         let (ts, r) = crate::channels::local::bind::<T>(port, self.parallel, 1024);
         *bp += 1;
         let mut senders = Vec::with_capacity(self.parallel);
         for t in ts {
-            senders.push(StageSink::new(t));
+            senders.push(LocalStageSink::new(t));
         }
-        (senders, StageSource::new(r))
+        (senders, StageInput::new(r))
     }
 
     pub fn build(self) -> SandFlow {
