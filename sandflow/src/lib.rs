@@ -1,9 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use std::sync::Arc;
-
-pub use flow::worker_id;
+pub use flow::worker_index;
 use futures::Stream;
 
 use crate::errors::FError;
@@ -55,36 +53,42 @@ where
 {
     let mut txs = Vec::new();
     let mut rxs = Vec::new();
-    let mut fbs = Vec::new();
 
-    let err_hook = Arc::new(ErrorHook::new());
-    for i in 0..parallel {
+    for _ in 0..parallel {
         let (tx, rx) = futures::channel::mpsc::channel::<DI>(1024);
         txs.push(LocalStageSink::<DI>::new(tx));
         rxs.push(rx);
-        fbs.push(SandFlowBuilder::new(job_id, parallel, i, err_hook.clone()));
     }
 
     let source_fut = source.select_forward(SelectSink::round_select(txs));
-
     let (tx, rx) = futures::channel::mpsc::channel::<DO>(1024);
+
+    let mut primary = SandFlowBuilder::new(job_id, parallel);
+    let mut mirrors = Vec::with_capacity(parallel - 1);
+
     for (i, r) in rxs.into_iter().enumerate() {
-        let fb = fbs[i].clone();
-        let st = PStream::new(fb, StageInput::new(r));
+        let fb = if i == 0 {
+            primary.clone()
+        } else {
+            let mirror = primary.fork_mirror();
+            mirrors.push(mirror.clone());
+            mirror
+        };
+
+        let st = PStream::new(fb.clone(), StageInput::new(r));
         let progress = func();
         let last = progress(st);
         let sink = LocalStageSink::<DO>::new(tx.clone());
         let last_fut = last.forward(sink);
-        fbs[i].add_stage(last_fut);
+        fb.add_stage(last_fut);
     }
 
-    for fb in fbs {
-        debug!("spawn worker[{}] of job({}) with {} stages;", fb.get_index(), fb.get_job_id(), fb.stage_size());
-        let task = fb.build();
-        sandflow_executor::spawn(task);
+    let error_hook = primary.get_error_hook().clone();
+    sandflow_executor::spawn(SourceStage::new(job_id, error_hook.clone(), source_fut));
+    sandflow_executor::spawn(primary.build());
+    for m in mirrors {
+        sandflow_executor::spawn(m.build());
     }
 
-    sandflow_executor::spawn(SourceStage::new(job_id, err_hook.clone(), source_fut));
-
-    ResultStream::new(err_hook, rx)
+    ResultStream::new(error_hook, rx)
 }
