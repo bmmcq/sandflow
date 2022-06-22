@@ -10,6 +10,7 @@ use std::task::{Context, Poll};
 use futures::future::JoinAll;
 use sandflow_cluster::ServerId;
 
+use crate::channels::local::LocalChannel;
 use crate::errors::FError;
 use crate::stages::sink::LocalStageSink;
 use crate::stages::source::StageInput;
@@ -24,7 +25,7 @@ pub struct SandFlowBuilder {
     worker_index: usize,
     server_index: usize,
     stages: Rc<RefCell<Vec<AsyncStage>>>,
-    next_ch_id: Rc<RefCell<u32>>,
+    next_ch_index: Rc<RefCell<usize>>,
     alloc_channels: Rc<RefCell<Vec<VecDeque<Box<dyn Any>>>>>,
     next_worker_index: usize,
     error_hook: Arc<ErrorHook>,
@@ -43,7 +44,7 @@ impl SandFlowBuilder {
             worker_index: 0,
             server_index,
             stages: Rc::new(RefCell::new(Vec::new())),
-            next_ch_id: Rc::new(RefCell::new(0)),
+            next_ch_index: Rc::new(RefCell::new(0)),
             alloc_channels: Rc::new(RefCell::new(Vec::new())),
             next_worker_index: 0,
             error_hook: Arc::new(ErrorHook::new()),
@@ -64,7 +65,7 @@ impl SandFlowBuilder {
                 worker_index,
                 server_index: self.server_index,
                 stages: Rc::new(RefCell::new(vec![])),
-                next_ch_id: Rc::new(RefCell::new(0)),
+                next_ch_index: Rc::new(RefCell::new(0)),
                 alloc_channels: self.alloc_channels.clone(),
                 next_worker_index: 0,
                 error_hook: self.error_hook.clone(),
@@ -81,6 +82,10 @@ impl SandFlowBuilder {
 
     pub fn get_index(&self) -> usize {
         self.worker_index
+    }
+
+    pub fn get_local_peers(&self) -> usize {
+        self.local_peers
     }
 
     pub fn stage_size(&self) -> usize {
@@ -105,15 +110,36 @@ impl SandFlowBuilder {
     }
 
     pub fn alloc_local<T: SandData>(&self) -> (Vec<LocalStageSink<T>>, StageInput<T>) {
-        let mut next_ch_id = self.next_ch_id.borrow_mut();
-        let ch_id = *next_ch_id;
-        let (ts, r) = crate::channels::local::bind::<T>(ch_id, self.local_peers, 1024);
-        *next_ch_id += 1;
-        let mut senders = Vec::with_capacity(self.local_peers);
-        for t in ts {
-            senders.push(LocalStageSink::new(t));
+        assert!(self.local_peers > 1, "local peers should be larger than 1");
+        let mut next_ch_index = self.next_ch_index.borrow_mut();
+        let ch_index = *next_ch_index;
+        let (senders, receiver) = if self.worker_index == 0 {
+            let mut channels = crate::channels::local::alloc::<T>(self.local_peers, 1024);
+            assert_eq!(channels.len(), self.local_peers);
+            let (t, r) = channels.pop_front().unwrap().take();
+            let mut queue = VecDeque::with_capacity(channels.len());
+            for ch in channels {
+                queue.push_back(Box::new(ch) as Box<dyn Any>);
+            }
+            let mut alloc_chs = self.alloc_channels.borrow_mut();
+            assert_eq!(alloc_chs.len(), ch_index);
+            alloc_chs.push(queue);
+            (t, r)
+        } else {
+            let mut alloc_chs = self.alloc_channels.borrow_mut();
+            assert!(alloc_chs.len() > ch_index);
+            let ch_any = alloc_chs[ch_index].pop_front().expect("local channel lost;");
+            ch_any
+                .downcast::<LocalChannel<T>>()
+                .expect("type cast fail;")
+                .take()
+        };
+        *next_ch_index += 1;
+        let mut sinks = Vec::with_capacity(self.local_peers);
+        for t in senders {
+            sinks.push(LocalStageSink::new(t));
         }
-        (senders, StageInput::new(r))
+        (sinks, StageInput::new(receiver))
     }
 
     pub fn build(self) -> SandFlow {
